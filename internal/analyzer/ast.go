@@ -26,7 +26,7 @@ func ParseFile(fset *token.FileSet, path string) (*Graph, error) {
 	parent := pkgID(pkg) // "pkg:testdata"
 
 	apecs := Node{
-		ID:   NodeID(parent),
+		ID:   parent,
 		Name: pkg,
 		Type: NodePackage,
 		File: file,
@@ -89,7 +89,7 @@ func ParseFile(fset *token.FileSet, path string) (*Graph, error) {
 
 type newEdgeProps struct {
 	kind EdgeType
-	from string
+	from NodeID
 	to   string
 }
 
@@ -107,14 +107,14 @@ type newNodeProps struct {
 	pkg      string
 	name     string
 	file     string
-	parent   string
+	parent   NodeID
 	line     int
 }
 
 func newNode(props newNodeProps) Node {
 	id := nodeID(props.nodeType, props.pkg, props.name)
 	return Node{
-		ID:       NodeID(id),
+		ID:       id,
 		Name:     props.name,
 		Type:     props.nodeType,
 		File:     props.file,
@@ -123,14 +123,14 @@ func newNode(props newNodeProps) Node {
 	}
 }
 
-func pkgID(pkg string) string {
-	return fmt.Sprintf("pkg:%s", pkg)
+func pkgID(pkg string) NodeID {
+	return NodeID(fmt.Sprintf("pkg:%s", pkg))
 }
 
 func nodeID(kind NodeType, pkg, name string) NodeID {
-	return NodeID(fmt.Sprintf("{%s}:{%s}:{%s}", kind, pkg, name))
+	return NodeID(fmt.Sprintf("%s:%s:%s", kind, pkg, name))
 }
 
-func edgeID(kind EdgeType, from, to string) EdgeID {
+func edgeID(kind EdgeType, from NodeID, to string) EdgeID {
 	return EdgeID(fmt.Sprintf("%s|%s|%s", kind, from, to))
 }

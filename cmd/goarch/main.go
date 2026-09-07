@@ -2,9 +2,12 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"log/slog"
 	"os"
 
+	"github.com/coffee22coder/goarch-visualizer/internal/ai"
 	"github.com/coffee22coder/goarch-visualizer/internal/analyzer"
 	"github.com/coffee22coder/goarch-visualizer/internal/mcp"
 )
@@ -35,6 +38,21 @@ func runCLI(path string) {
 		os.Exit(1)
 	}
 	slog.Info("analyze done", "nodes", len(g.Nodes), "edges", len(g.Edges))
+
+	ollama := &ai.OllamaAnalyzer{}
+
+	analysis, err := ollama.Analyze(context.Background(), g, "all")
+	if err != nil {
+		slog.Error("analyze failed", "error", err)
+		os.Exit(1)
+	}
+
+	out, err := json.MarshalIndent(analysis, "", "  ")
+	if err != nil {
+		slog.Error("marshal analysis", "error", err)
+		os.Exit(1)
+	}
+	fmt.Println(string(out)) // stdout — удобнее смотреть, чем slog
 }
 
 func runMCP(ctx context.Context, logger *slog.Logger) error {

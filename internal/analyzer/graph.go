@@ -23,13 +23,13 @@ type Node struct {
 	File string
 	Line int
 
-	ParentID    string
-	ChildrenIDs []string
+	ParentID    NodeID
+	ChildrenIDs []NodeID
 }
 
 type Edge struct {
 	ID   EdgeID
-	From string
+	From NodeID
 	To   string
 	Kind EdgeType
 }

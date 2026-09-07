@@ -2,9 +2,10 @@ package mcp
 
 import (
 	"context"
-	"fmt"
+	"encoding/json"
 	"log/slog"
 
+	"github.com/coffee22coder/goarch-visualizer/internal/analyzer"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 )
@@ -43,11 +44,17 @@ func analyzeHandler(ctx context.Context, request mcp.CallToolRequest) (*mcp.Call
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
+	// level := request.GetInt("level", 2)
 
-	l, err := request.RequireInt("level")
+	graph, err := analyzer.AnalyzeDir(p)
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
 
-	return mcp.NewToolResultText(fmt.Sprintf("analyzeHandler: path = %s, level = %d", p, l)), nil
+	body, err := json.Marshal(graph)
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
+	return mcp.NewToolResultText(string(body)), nil
 }
