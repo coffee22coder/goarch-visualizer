@@ -9,7 +9,8 @@ import (
 
 func TestParseFile(t *testing.T) {
 	fset := token.NewFileSet()
-	g, err := analyzer.ParseFile(fset, "../../testdata/sample.go")
+	importPath := "github.com/coffee22coder/goarch-visualizer/testdata"
+	g, err := analyzer.ParseFile(fset, "../../testdata/sample.go", importPath)
 	if err != nil {
 		t.Fatalf("error: %v", err)
 	}

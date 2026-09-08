@@ -10,9 +10,20 @@ import (
 	"github.com/coffee22coder/goarch-visualizer/internal/ai"
 	"github.com/coffee22coder/goarch-visualizer/internal/analyzer"
 	"github.com/coffee22coder/goarch-visualizer/internal/mcp"
+	"github.com/joho/godotenv"
 )
 
 func main() {
+	_ = godotenv.Load()
+
+	var a ai.Analyzer
+	switch os.Getenv("GOARCH_AI") {
+	case "ollama":
+		a = &ai.OllamaAnalyzer{}
+	default:
+		a = &ai.MockAnalyzer{} // на работе без Ollama
+	}
+
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	slog.SetDefault(logger)
 
@@ -21,7 +32,7 @@ func main() {
 			slog.Error("CLI mode: path required")
 			os.Exit(1)
 		}
-		runCLI(os.Args[2])
+		runCLI(os.Args[2], a)
 		return
 	}
 
@@ -32,16 +43,13 @@ func main() {
 	}
 }
 
-func runCLI(path string) {
+func runCLI(path string, a ai.Analyzer) {
 	g, err := analyzer.AnalyzeDir(path)
 	if err != nil {
 		os.Exit(1)
 	}
-	slog.Info("analyze done", "nodes", len(g.Nodes), "edges", len(g.Edges))
 
-	ollama := &ai.OllamaAnalyzer{}
-
-	analysis, err := ollama.Analyze(context.Background(), g, "all")
+	analysis, err := a.Analyze(context.Background(), g, "all")
 	if err != nil {
 		slog.Error("analyze failed", "error", err)
 		os.Exit(1)

@@ -8,10 +8,15 @@ import (
 )
 
 func AnalyzeDir(root string) (*Graph, error) {
+	moduleRoot, modulePath, err := findModuleRoot(root)
+	if err != nil {
+		return nil, err
+	}
+
 	fset := token.NewFileSet()
 	result := &Graph{Nodes: make([]Node, 0), Edges: make([]Edge, 0)}
 
-	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+	err = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -29,7 +34,12 @@ func AnalyzeDir(root string) (*Graph, error) {
 			return nil
 		}
 
-		g, err := ParseFile(fset, path)
+		importPath, err := packageImportPath(moduleRoot, modulePath, path)
+		if err != nil {
+			return err
+		}
+
+		g, err := ParseFile(fset, path, importPath)
 		if err != nil {
 			return err
 		}

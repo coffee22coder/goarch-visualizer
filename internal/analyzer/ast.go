@@ -9,7 +9,7 @@ import (
 	"strings"
 )
 
-func ParseFile(fset *token.FileSet, path string) (*Graph, error) {
+func ParseFile(fset *token.FileSet, path, importPath string) (*Graph, error) {
 	f, err := parser.ParseFile(fset, path, nil, 0)
 	if err != nil {
 		slog.Error("analyzer parse file", "error", err)
@@ -21,13 +21,12 @@ func ParseFile(fset *token.FileSet, path string) (*Graph, error) {
 		Edges: make([]Edge, 0),
 	}
 
-	pkg := f.Name.Name   // "testdata"
-	file := path         // "testdata/sample.go"
-	parent := pkgID(pkg) // "pkg:testdata"
+	file := path                 // "testdata/sample.go"
+	parent := NodeID(importPath) // "github.com/coffee22coder/goarch-visualizer/testdata"
 
 	apecs := Node{
 		ID:   parent,
-		Name: pkg,
+		Name: f.Name.Name,
 		Type: NodePackage,
 		File: file,
 		Line: fset.Position(f.Name.Pos()).Line,
@@ -51,7 +50,7 @@ func ParseFile(fset *token.FileSet, path string) (*Graph, error) {
 		case *ast.FuncDecl:
 			node := newNode(newNodeProps{
 				nodeType: NodeFunction,
-				pkg:      pkg,
+				pkg:      importPath,
 				name:     x.Name.Name,
 				file:     file,
 				parent:   parent,
@@ -69,7 +68,7 @@ func ParseFile(fset *token.FileSet, path string) (*Graph, error) {
 					line := fset.Position(ts.Pos()).Line
 					node := newNode(newNodeProps{
 						nodeType: NodeTypeDecl,
-						pkg:      pkg,
+						pkg:      importPath,
 						name:     ts.Name.Name,
 						file:     file,
 						parent:   parent,
@@ -121,10 +120,6 @@ func newNode(props newNodeProps) Node {
 		Line:     props.line,
 		ParentID: props.parent,
 	}
-}
-
-func pkgID(pkg string) NodeID {
-	return NodeID(fmt.Sprintf("pkg:%s", pkg))
 }
 
 func nodeID(kind NodeType, pkg, name string) NodeID {
