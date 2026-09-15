@@ -10,6 +10,7 @@ import (
 	"github.com/coffee22coder/goarch-visualizer/internal/ai"
 	"github.com/coffee22coder/goarch-visualizer/internal/analyzer"
 	"github.com/coffee22coder/goarch-visualizer/internal/mcp"
+	"github.com/coffee22coder/goarch-visualizer/internal/renderer"
 	"github.com/joho/godotenv"
 )
 
@@ -49,13 +50,19 @@ func runCLI(path string, a ai.Analyzer) {
 		os.Exit(1)
 	}
 
+	res, _ := json.MarshalIndent(g, "", "  ")
+	fmt.Println(string(res))
+
 	analysis, err := a.Analyze(context.Background(), g, "all")
 	if err != nil {
 		slog.Error("analyze failed", "error", err)
 		os.Exit(1)
 	}
 
-	out, err := json.MarshalIndent(analysis, "", "  ")
+	valid := ai.Validate(g, analysis)
+	fmt.Println(renderer.ToMermaid(*g, *valid))
+
+	out, err := json.MarshalIndent(valid, "", "  ")
 	if err != nil {
 		slog.Error("marshal analysis", "error", err)
 		os.Exit(1)
