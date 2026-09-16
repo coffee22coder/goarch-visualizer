@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -37,7 +36,7 @@ func main() {
 		return
 	}
 
-	err := runMCP(context.Background(), logger)
+	err := runMCP(context.Background(), a, logger)
 	if err != nil {
 		slog.Error("MCP mode", "error", err)
 		os.Exit(1)
@@ -50,8 +49,8 @@ func runCLI(path string, a ai.Analyzer) {
 		os.Exit(1)
 	}
 
-	res, _ := json.MarshalIndent(g, "", "  ")
-	fmt.Println(string(res))
+	// res, _ := json.MarshalIndent(g, "", "  ")
+	// fmt.Println(string(res))
 
 	analysis, err := a.Analyze(context.Background(), g, "all")
 	if err != nil {
@@ -62,17 +61,17 @@ func runCLI(path string, a ai.Analyzer) {
 	valid := ai.Validate(g, analysis)
 	fmt.Println(renderer.ToMermaid(*g, *valid))
 
-	out, err := json.MarshalIndent(valid, "", "  ")
-	if err != nil {
-		slog.Error("marshal analysis", "error", err)
-		os.Exit(1)
-	}
-	fmt.Println(string(out)) // stdout — удобнее смотреть, чем slog
+	// out, err := json.MarshalIndent(valid, "", "  ")
+	// if err != nil {
+	// 	slog.Error("marshal analysis", "error", err)
+	// 	os.Exit(1)
+	// }
+	// fmt.Println(string(out)) // stdout — удобнее смотреть, чем slog
 }
 
-func runMCP(ctx context.Context, logger *slog.Logger) error {
+func runMCP(ctx context.Context, a ai.Analyzer, logger *slog.Logger) error {
 
-	err := mcp.Run(ctx, logger)
+	err := mcp.Run(ctx, a, logger)
 	if err != nil {
 		return err
 	}

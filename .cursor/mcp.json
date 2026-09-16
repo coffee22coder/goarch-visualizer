@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "goarch-visualizer": {
+      "command": "go",
+      "args": ["run", "${workspaceFolder}/cmd/goarch"]
+    }
+  }
+}
