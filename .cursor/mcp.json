@@ -2,7 +2,10 @@
   "mcpServers": {
     "goarch-visualizer": {
       "command": "go",
-      "args": ["run", "${workspaceFolder}/cmd/goarch"]
+      "args": ["run", "${workspaceFolder}/cmd/goarch"],
+      "env": {
+        "GOARCH_AI": "ollama"
+      }
     }
   }
 }

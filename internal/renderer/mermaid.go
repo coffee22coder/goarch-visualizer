@@ -57,5 +57,6 @@ func ToMermaid(g analyzer.Graph, a ai.Analysis) string {
 func safeId(id string) string {
 	id = strings.ReplaceAll(id, "/", "_")
 	id = strings.ReplaceAll(id, ":", "_")
+	id = strings.ReplaceAll(id, ".", "_")
 	return id
 }

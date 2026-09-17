@@ -21,7 +21,9 @@ type OllamaAnalyzer struct{}
 
 func (a *OllamaAnalyzer) Analyze(ctx context.Context, g *analyzer.Graph, focus string) (*Analysis, error) {
 
-	graphJSON, err := json.Marshal(g)
+	pkgGraph := analyzer.PackageGraph(g)
+
+	graphJSON, err := json.Marshal(pkgGraph)
 	if err != nil {
 		return nil, err
 	}
@@ -34,7 +36,7 @@ func (a *OllamaAnalyzer) Analyze(ctx context.Context, g *analyzer.Graph, focus s
 		"messages": []map[string]any{
 			map[string]any{
 				"role":    "system",
-				"content": "You analyze a Go architecture graph. Reply with ONLY JSON matching this schema: {\"nodes\":[{\"id\":\"string\",\"status\":\"ok|warning|error\",\"reason\":\"string\"}],\"recommendations\":[\"string\"]}. Use only node ids from the input. Do not invent ids.",
+				"content": "You analyze a Go architecture graph (packages only). Reply with ONLY JSON matching this schema: {\"nodes\":[{\"id\":\"string\",\"status\":\"ok|warning|error\",\"reason\":\"string\"}],\"recommendations\":[\"string\"]}. Use only node ids from the input. Do not invent ids Return status for every package node id from the input..",
 			},
 			map[string]any{
 				"role":    "user",
