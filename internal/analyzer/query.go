@@ -49,19 +49,12 @@ func Execute(g *Graph, q Query) (*Graph, error) {
 }
 
 func includesTarget(g *Graph, t NodeID) error {
-	isFind := false
-
 	for _, n := range g.Nodes {
 		if n.ID == t {
-			isFind = true
+			return nil
 		}
 	}
-
-	if !isFind {
-		return fmt.Errorf("Target %s not found", t)
-	}
-
-	return nil
+	return fmt.Errorf("target %s not found", t)
 }
 
 func createGraph(op Op, g *Graph, t NodeID) *Graph {
