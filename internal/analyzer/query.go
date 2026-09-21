@@ -33,10 +33,9 @@ func Execute(g *Graph, q Query) (*Graph, error) {
 
 	case OpPath:
 	case OpNeighbors:
-	default:
-		return nil, fmt.Errorf("Operation %s is not valid", q.Op)
 	}
 
+	return nil, fmt.Errorf("Operation %s is not valid", q.Op)
 }
 
 func includesTarget(g *Graph, t NodeID) error {
