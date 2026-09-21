@@ -18,7 +18,7 @@
 Примеры:
 
 - `Остановился на задаче C-01. Продолжаем.`
-- `Задача C-02 done. Переключаемся на C-03.`
+- `Задача C-01 done. Переключаемся на C-02.`
 - `Покажи статус по docs/PLAN.md, что дальше?`
 
 **Связанные файлы:**
@@ -37,10 +37,172 @@
 
 | Поле | Значение |
 |------|----------|
-| **Активная задача** | `C-01` — RuleAnalyzer (детерминированные правила слоёв) |
-| **Фаза** | 1 — MVP (demo для экспертов) |
-| **Обновлено** | 2026-09-17 |
+| **Стратегия** | Text-to-graph query: вопрос → `{op, ids}` → Go обходит граф → срез Mermaid |
+| **Активная задача** | `C-01` — `Execute` в `internal/analyzer/query.go` (без LLM) |
+| **Фаза** | 1 — query поверх package graph |
+| **Обновлено** | 2026-09-21 (диаграммы двух потоков зафиксированы) |
 | **Блокеры** | нет |
+
+---
+
+## Продуктовое решение (зафиксировано)
+
+AI внутри MCP **парсит вопрос** в чёткий `{op, target, …}`. Ответ по архитектуре считает **анализатор графа** (`Execute`), не модель.
+
+**Не делаем:** линтер слоёв, раскраску ok/warning как смысл AI, recommendations.
+
+Claude в чате Cursor — host (может болтать про схему). Это не `internal/ai`. Ollama в goarch — только шаг «текст → Query».
+
+### Модули и ответственность
+
+| Модуль | Пакет | Вход | Выход | За что отвечает |
+|--------|-------|------|-------|-----------------|
+| **MCP / CLI** | `internal/mcp`, `cmd/goarch` | `path`, optional `question` | текст клиенту | принять вызов, выбрать поток, ничего не считать |
+| **Analyzer (граф)** | `internal/analyzer` `AnalyzeDir`, `PackageGraph` | путь к Go-модулю | `Graph` пакетов и import-рёбер | факты из кода |
+| **AI** | `internal/ai` ParseQuery (Ollama/mock) | PackageGraph + строка вопроса | `Query` `{op, target, from, to, exclude_prefix}` | **распарсить запрос**, не искать по рёбрам |
+| **Validate** | `internal/ai` ValidateQuery | Graph + Query | тот же Query или error | id существуют, op из enum |
+| **Execute** | `internal/analyzer` query.go | Graph + Query | срез `Graph` | обход рёбер, окончательный факт |
+| **Renderer** | `internal/renderer` | `Graph` | строка Mermaid | только рисунок |
+
+---
+
+### Поток A — без вопроса (только схема)
+
+LLM **не вызывается**.
+
+**Вход MCP/CLI:** `{ "path": "/Users/ermakov/GO/bookings" }`
+
+**Выход:** `graph LR` всего модуля (package graph).
+
+```mermaid
+flowchart LR
+  subgraph inA["Вход"]
+    P["path"]
+  end
+
+  subgraph mcpA["cmd/goarch + mcp"]
+    H["handler: question пустой"]
+  end
+
+  subgraph anA["analyzer"]
+    AD["AnalyzeDir"]
+    PG["PackageGraph"]
+  end
+
+  subgraph renA["renderer"]
+    TM["ToMermaid"]
+  end
+
+  subgraph outA["Выход"]
+    M["Mermaid всего графа"]
+  end
+
+  P --> H --> AD --> PG --> TM --> M
+```
+
+AI в этом потоке нет.
+
+---
+
+### Поток B — с вопросом (парсинг AI + ответ анализатора)
+
+**Вход MCP/CLI:**
+
+```json
+{
+  "path": "/Users/ermakov/GO/bookings",
+  "question": "кто импортирует dto кроме http"
+}
+```
+
+**Выход AI (не пользователю):** `{ "op": "dependents", "target": "…/dto", "exclude_prefix": ["…/adapter/http"] }`
+
+**Выход MCP пользователю:** JSON фактов (список пакетов/рёбер) + Mermaid **среза**.
+
+```mermaid
+flowchart LR
+  subgraph inB["Вход"]
+    P2["path"]
+    Q["question: текст"]
+  end
+
+  subgraph mcpB["cmd/goarch + mcp"]
+    H2["handler: question не пустой"]
+  end
+
+  subgraph anB["analyzer"]
+    AD2["AnalyzeDir"]
+    PG2["PackageGraph"]
+    EX["Execute"]
+  end
+
+  subgraph aiB["ai"]
+    PQ["ParseQuery Ollama или mock"]
+    V["ValidateQuery"]
+  end
+
+  subgraph renB["renderer"]
+    TM2["ToMermaid срез"]
+  end
+
+  subgraph outB["Выход"]
+    F["JSON фактов"]
+    M2["Mermaid среза"]
+  end
+
+  P2 --> H2 --> AD2 --> PG2
+  Q --> H2
+  PG2 --> PQ
+  Q --> PQ
+  PQ --> V --> EX
+  PG2 --> EX
+  EX --> TM2
+  EX --> F
+  TM2 --> M2
+```
+
+| Шаг | Модуль | Вход | Выход |
+|-----|--------|------|-------|
+| 1 | analyzer | `path` | полный `Graph` |
+| 2 | analyzer | `Graph` | только packages + import edges |
+| 3 | **ai** | packages + `question` | `Query` (операция и id) |
+| 4 | ai Validate | `Query` + граф | валидный `Query` или ошибка |
+| 5 | analyzer Execute | граф + `Query` | срез графа = **ответ** |
+| 6 | renderer | срез | Mermaid |
+
+### Операции (enum)
+
+| `op` | Вопрос пользователя | Что считает Go |
+|------|---------------------|----------------|
+| `dependents` | кто импортирует X | входящие рёбра |
+| `dependencies` | что импортирует X | исходящие рёбра |
+| `path` | есть ли связь A→…→B | BFS/DFS |
+| `neighbors` | что рядом с X | hop=1 |
+
+### Контракт данных
+
+**MCP вход с вопросом:**
+
+```json
+{
+  "path": "/Users/ermakov/GO/bookings",
+  "question": "кто импортирует dto кроме http"
+}
+```
+
+**Выход LLM (только это):**
+
+```json
+{
+  "op": "dependents",
+  "target": "github.com/coffee22coder/bookings/internal/adapter/http/dto",
+  "exclude_prefix": ["github.com/coffee22coder/bookings/internal/adapter/http"]
+}
+```
+
+**Выход Go / MCP:** JSON фактов + Mermaid только этих узлов/рёбер.
+
+**Без question:** только `graph LR` всего модуля, 0 вызовов Ollama.
 
 ---
 
@@ -50,21 +212,25 @@
 
 | # | Решение | Почему |
 |---|---------|--------|
-| D-01 | **AI внутри Go** (`interface Analyzer`), один pipeline для CLI и MCP | Архитектура B; не два round-trip через Cursor |
-| D-02 | **Claude API не обязателен** | Ollama дома, mock на работе; Cursor сам — LLM host |
+| D-01 | **AI внутри Go** (`interface` на ParseQuery), один pipeline CLI+MCP | не два round-trip через Cursor для query |
+| D-02 | **Claude API не обязателен** | Ollama дома, mock для тестов query без сети |
 | D-03 | **Package ID = import path** | `sample/internal/service`, не `pkg:service` |
 | D-04 | **Mermaid рисует только packages** | funcs/types в графе есть, но не на диаграмме |
-| D-05 | **Ollama получает `PackageGraph`** | полный граф → timeout на MCP |
-| D-06 | **Validate отсекает галлюцинации LLM** | whitelist node ID из реального графа |
-| D-07 | **MVP = rule-based validation**, LLM — опционально | mock/Ollama не дают честных violations |
+| D-05 | **Ollama получает `PackageGraph`** | полный граф (funcs/types) → timeout |
+| D-06 | **Validate отсекает чужие node ID** | LLM не имеет права вернуть id вне графа |
+| D-07 | **MVP = text-to-graph query, не lint** | уникальность vs godepgraph; не arch-go |
 | D-08 | **`go/packages` — после MVP** | WalkDir + module.go достаточно для demo |
+| D-09 | **Execute живёт в `analyzer`, не в `ai`** | обход графа детерминированный, без LLM |
+| D-10 | **Пустой question → LLM не вызывать** | схема должна быть мгновенной |
 
 ---
 
 ## Pipeline — статус компонентов
 
 ```
-AnalyzeDir (WalkDir + ast)  →  Analyzer  →  Validate  →  ToMermaid  →  CLI / MCP
+AnalyzeDir → PackageGraph
+    ├─ question == ""  → ToMermaid(весь граф)
+    └─ question != ""  → ParseQuery (LLM/mock) → ValidateQuery → Execute → ToMermaid(срез)
 ```
 
 | Компонент | Путь | Статус | Примечание |
@@ -73,18 +239,62 @@ AnalyzeDir (WalkDir + ast)  →  Analyzer  →  Validate  →  ToMermaid  →  C
 | Module resolve | `internal/analyzer/module.go` | ✅ | go.mod, import path |
 | AST parse | `internal/analyzer/ast.go` | ✅ | packages, funcs, types, imports |
 | WalkDir loader | `internal/analyzer/dir.go` | ✅ | skip vendor, _test.go |
-| go/packages loader | — | ❌ | задача D-01 |
-| MockAnalyzer | `internal/ai/mock.go` | 🟡 | всем packages `ok` |
-| OllamaAnalyzer | `internal/ai/ollama.go` | ✅ | qwen2.5-coder:7b, PackageGraph |
-| ClaudeAnalyzer | — | ❌ | задача E-01 |
-| RuleAnalyzer | — | ❌ | **задача C-01 (активная)** |
-| Validate | `internal/ai/validate.go` | ✅ | |
-| Mermaid | `internal/renderer/mermaid.go` | ✅ | safeId: `/`, `:`, `.` → `_` |
-| HTML report | — | ❌ | задача F-02 |
-| MCP server | `internal/mcp/server.go` | ✅ | tool `analyze_project` |
-| CLI | `cmd/goarch/main.go` | ✅ | `analyze <path>` |
+| **Query Execute** | `internal/analyzer/query.go` | ❌ | **C-01** |
+| go/packages loader | — | ❌ | фаза 2, D-01 |
+| Mock ParseQuery | `internal/ai/mock.go` | 🟡 | сейчас красит ok; переписать |
+| Ollama ParseQuery | `internal/ai/ollama.go` | 🟡 | сейчас status JSON; переписать |
+| Claude API | — | ❌ | не в MVP |
+| RuleAnalyzer | — | ❌ | **отменено** (линтер) |
+| Validate | `internal/ai/validate.go` | 🟡 | сейчас статусы; → ValidateQuery |
+| Mermaid | `internal/renderer/mermaid.go` | ✅ | safeId: `/`, `:`, `.` |
+| MCP `analyze_project` | `internal/mcp/server.go` | 🟡 | нет `question` |
+| CLI | `cmd/goarch/main.go` | 🟡 | нет аргумента question |
 
-Легенда: ✅ готово · 🟡 работает, но не для MVP · ❌ не начато
+Легенда: ✅ готово · 🟡 есть, надо переписать · ❌ не начато
+
+---
+
+## План изменений по файлам (итерация query)
+
+### Не трогать
+
+- `internal/analyzer/ast.go`
+- `internal/analyzer/dir.go`
+- `internal/analyzer/module.go`
+- `internal/analyzer/graph.go` (`PackageGraph` уже есть)
+- `cmd/inspect/main.go`
+- `testdata/sample-project/**` (только как фикстура тестов)
+
+### Новые файлы
+
+| Файл | Зачем |
+|------|--------|
+| `internal/analyzer/query.go` | `Op`, `Query`, `Execute(g, q) (*Graph, error)` |
+| `internal/analyzer/query_test.go` | dependents/path на sample-project |
+
+### Менять
+
+| Файл | Что сделать |
+|------|-------------|
+| `internal/ai/types.go` | Query JSON вместо Analysis/statuses в hot path |
+| `internal/ai/analyzer.go` | `ParseQuery(ctx, g, question) (analyzer.Query, error)` вместо `Analyze → Analysis` |
+| `internal/ai/validate.go` | `ValidateQuery(g, q)` — enum op, id ∈ графа, обязательные поля |
+| `internal/ai/ollama.go` | промпт: только schema Query; вход = PackageGraph + question |
+| `internal/ai/mock.go` | эвристика по тексту вопроса для тестов без Ollama |
+| `internal/renderer/mermaid.go` | рисовать срез; для MVP можно `ToMermaid(g, Analysis{})` |
+| `internal/mcp/server.go` | optional `question`; пусто → без LLM |
+| `cmd/goarch/main.go` | `analyze <path> [question...]` |
+| `readme.md` | param `question`, два примера |
+
+### Порядок реализации (не прыгать через шаг)
+
+1. **C-01** `query.go` + тесты (без AI).
+2. **C-02** `ValidateQuery`.
+3. **C-03** переписать `Analyzer` / ollama / mock на ParseQuery.
+4. **C-04** склеить MCP + CLI.
+5. **C-05** README.
+
+Пока C-01 не зелёный — Ollama в новый контракт не подключать.
 
 ---
 
@@ -95,90 +305,88 @@ AnalyzeDir (WalkDir + ast)  →  Analyzer  →  Validate  →  ToMermaid  →  C
 | ID | Задача | Статус | DoD |
 |----|--------|--------|-----|
 | A-01 | Graph + AST + import path ID | ✅ | тесты зелёные, edges сходятся |
-| A-02 | MCP tool `analyze_project` | ✅ | Cursor видит tool, зелёный статус |
-| A-03 | CLI `go run ./cmd/goarch analyze` | ✅ | Mermaid в stdout |
-| A-04 | AI interface + Mock + Ollama | ✅ | `GOARCH_AI=ollama\|mock` |
-| A-05 | Validate (anti-hallucination) | ✅ | чужие node ID отбрасываются |
-| A-06 | Mermaid renderer + classDef | ✅ | ok/warning/error цвета |
-| A-07 | PackageGraph для Ollama | ✅ | bookings не timeout |
-| A-08 | safeId fix (точки в ID) | ✅ | Mermaid парсится без «github» артеfact |
-| A-09 | MCP в Cursor (global config) | ✅ | `go run -C ...`, allowlist |
-| A-10 | README | ✅ | установка, demo, честные ограничения |
+| A-02 | MCP tool `analyze_project` | ✅ | Cursor видит tool |
+| A-03 | CLI `analyze <path>` | ✅ | Mermaid в stdout |
+| A-04 | AI interface + Mock + Ollama | ✅ | старый контракт Analysis; будет переписан |
+| A-05 | Validate статусов | ✅ | будет заменён ValidateQuery |
+| A-06 | Mermaid + classDef | ✅ | |
+| A-07 | PackageGraph для Ollama | ✅ | bookings без timeout |
+| A-08 | safeId (точки) | ✅ | |
+| A-09 | MCP в Cursor | ✅ | global mcp.json, allowlist |
+| A-10 | README | ✅ | обновить на C-05 |
 
 ---
 
-### Фаза 1 — MVP (demo для экспертов) 🔄
+### Фаза 1 — Text-to-graph query 🔄
 
 | ID | Задача | Статус | Файлы | DoD |
 |----|--------|--------|-------|-----|
-| **C-01** | **RuleAnalyzer** | 🔄 **активная** | `internal/ai/rules.go`, `main.go` | 3–5 правил слоёв; default analyzer; unit-тесты |
-| C-02 | Детекция циклов | ⬜ | `internal/analyzer/cycle.go` или в rules | цикл A→B→A = error |
-| C-03 | Fixture `testdata/violation-project` | ⬜ | `testdata/violation-project/` | намеренные нарушения; тест красный |
-| C-04 | MCP: violations + Mermaid | ⬜ | `internal/mcp/server.go` | текст нарушений + diagram в одном ответе |
-| C-05 | Mermaid labels (path, не `main`) | ⬜ | `internal/renderer/mermaid.go` | `[internal/domain]` вместо `[domain]` |
-| C-06 | `go build` в MCP config | ⬜ | readme, `~/.cursor/mcp.json` | бинарь вместо `go run` |
-| C-07 | Demo на `bookings` | ⬜ | — | `port→dto` = warning от rules, не LLM |
+| **C-01** | **Execute query** | 🔄 **активная** | `internal/analyzer/query.go`, `query_test.go` | dependents/path на sample-project |
+| C-02 | ValidateQuery | ⬜ | `internal/ai/validate.go` | чужой id → error |
+| C-03 | ParseQuery: mock + ollama | ⬜ | `analyzer.go`, `mock.go`, `ollama.go`, `types.go` | LLM не возвращает список пакетов, только Query |
+| C-04 | MCP + CLI pipeline | ⬜ | `internal/mcp/server.go`, `cmd/goarch/main.go` | пустой question = без LLM |
+| C-05 | Docs | ⬜ | `readme.md` | примеры question |
+| C-06 | Demo bookings | ⬜ | — | «кто импортирует dto кроме http» → port, service, postgres |
 
-**Definition of Done для фазы 1:**
+**Definition of Done фазы 1:**
 
-- [ ] `analyze_project` на `bookings` показывает ≥1 warning (rule-based)
-- [ ] `violation-project` — красные узлы, тесты зелёные
-- [ ] Работает offline без Ollama
-- [ ] CLI и MCP дают одинаковый результат
-
----
-
-### Фаза 2 — Качество графа
-
-| ID | Задача | Статус | DoD |
-|----|--------|--------|-----|
-| D-01 | Loader на `go/packages` | ⬜ | build tags; env `GOARCH_LOADER=packages` |
-| D-02 | Subgraph в Mermaid | ⬜ | группировка cmd / domain / adapter |
-| D-03 | Параметр `level` в MCP | ⬜ | packages / types / functions |
+- [ ] `go test ./internal/analyzer/` — Execute зелёный
+- [ ] CLI без question — мгновенный полный Mermaid
+- [ ] CLI с question + mock — срез без Ollama
+- [ ] CLI с question + `GOARCH_AI=ollama` — тот же срез на sample-project
+- [ ] MCP param `question` optional
+- [ ] LLM не вызывается, если question пустой
 
 ---
 
-### Фаза 3 — Дополнительные инструменты
+### Фаза 2 — Качество графа (после query)
 
 | ID | Задача | Статус | DoD |
 |----|--------|--------|-----|
-| E-01 | Claude API analyzer | ⬜ | `GOARCH_AI=claude`, `ANTHROPIC_API_KEY` |
-| F-01 | `.goarch.yaml` конфиг правил | ⬜ | кастомные layer rules |
-| F-02 | HTML report generator | ⬜ | `internal/generator/html.go` |
-| F-03 | MCP tool `check_violations` | ⬜ | текстовый отчёт без diagram |
-| F-04 | Edges `call` / `implement` | ⬜ | из AST type info |
+| D-01 | Loader `go/packages` | ⬜ | build tags |
+| D-02 | Читаемые Mermaid labels | ⬜ | `[internal/domain]` не `[main]` |
+| D-03 | Timeout HTTP Ollama | ⬜ | не висеть бесконечно |
+
+---
+
+### Фаза 3 — отложено
+
+| ID | Задача | Статус | Почему отложено |
+|----|--------|--------|-----------------|
+| ~~RuleAnalyzer~~ | lint слоёв | ❌ | не продукт; arch-go |
+| E-01 | Claude API как ParseQuery | ⬜ | после стабильного ollama |
+| F-02 | HTML report | ⬜ | не MVP |
+| Impact / changed_files | идея 3 | ⬜ | после query |
+| Task → subgraph radius | идея 2 | ⬜ | после query |
 
 ---
 
 ## Задача C-01 — детали (активная)
 
-**Цель:** детерминированный анализатор архитектуры без LLM.
+**Цель:** детерминированный обход package graph. Без Ollama.
 
-**Правила MVP (черновик):**
+```go
+type Op string // dependents | dependencies | path | neighbors
 
-| # | Правило | Severity |
-|---|---------|----------|
-| R-01 | `domain` не импортирует другие пакеты модуля (кроме stdlib) | error |
-| R-02 | `port` не импортирует `adapter/*`, `cmd/*` | error |
-| R-03 | `port` → `dto` / `adapter/http/*` | warning |
-| R-04 | `adapter/postgres` → `dto` / HTTP слой | warning |
-| R-05 | цикл между packages | error |
+type Query struct {
+    Op            Op
+    Target        NodeID
+    From, To      NodeID
+    ExcludePrefix []string
+}
 
-**Шаги реализации:**
+func Execute(g *Graph, q Query) (*Graph, error)
+```
 
-1. Создать `internal/ai/rules.go` — `type RuleAnalyzer struct{}`
-2. Реализовать `Analyze(ctx, g, focus) (*Analysis, error)`
-3. Использовать `analyzer.PackageGraph(g)` для import edges
-4. Определять слой по substring в import path (`/domain`, `/port`, `/adapter/`, `/cmd/`)
-5. Default в `main.go`: `RuleAnalyzer` вместо `MockAnalyzer`
-6. Env override: `GOARCH_AI=ollama|mock|rules` (rules = default)
-7. Тест: `bookings` → warning на `port→dto`
+Работать на `PackageGraph(g)`.
 
-**Не делать в C-01:**
+**Тесты (`query_test.go`), фикстура `testdata/sample-project`:**
 
-- `.goarch.yaml` (hardcode правил достаточно)
-- Claude API
-- go/packages
+- dependents от `sample/internal/service` → пакет `sample/cmd/app`
+- path `sample/cmd/app` → `sample/internal/service` → found, 1 ребро
+- path в обратную сторону → not found / пустой граф (как решите в API, зафиксировать в тесте)
+
+**Не делать в C-01:** MCP, ollama, смена `Analyzer`.
 
 ---
 
@@ -186,11 +394,13 @@ AnalyzeDir (WalkDir + ast)  →  Analyzer  →  Validate  →  ToMermaid  →  C
 
 ### Переменные
 
-| Env | Значения | Default |
-|-----|----------|---------|
-| `GOARCH_AI` | `rules`, `mock`, `ollama` | `rules` (после C-01; сейчас `mock`) |
+| Env | Значения | Default | Когда LLM |
+|-----|----------|---------|-----------|
+| `GOARCH_AI` | `mock`, `ollama` | `mock` | только если передан `question` |
 
-### MCP — глобальный конфиг (`~/.cursor/mcp.json`)
+После C-04: `mock` парсит простые фразы; `ollama` — полный NL.
+
+### MCP (`~/.cursor/mcp.json`)
 
 ```json
 {
@@ -204,10 +414,9 @@ AnalyzeDir (WalkDir + ast)  →  Analyzer  →  Validate  →  ToMermaid  →  C
 }
 ```
 
-> Замени `/ABS/PATH/` на свой путь. Флаг `-C` обязателен.  
-> Для быстрого старта (C-06): `"command": "/ABS/PATH/goarch-visualizer/bin/goarch"`.
+`GOARCH_AI=ollama` не должен вызывать модель на запросе без `question`.
 
-### Allowlist (`~/.cursor/permissions.json`)
+### Allowlist
 
 ```json
 {
@@ -215,7 +424,7 @@ AnalyzeDir (WalkDir + ast)  →  Analyzer  →  Validate  →  ToMermaid  →  C
 }
 ```
 
-### Ollama (если `GOARCH_AI=ollama`)
+### Ollama
 
 ```bash
 ollama pull qwen2.5-coder:7b
@@ -228,9 +437,8 @@ ollama serve
 
 | Path | Назначение | Ожидание |
 |------|------------|----------|
-| `testdata/sample-project` | минимальный happy path | 2 packages, 1 edge, быстро |
-| `/Users/ermakov/GO/bookings` | реальный pet project | 13 packages, hexagonal |
-| `testdata/violation-project` | нарушения (C-03) | ❌ ещё не создан |
+| `testdata/sample-project` | Execute + mock query | 2 packages, 1 edge |
+| `/Users/ermakov/GO/bookings` | demo «dto кроме http» | port, service, postgres |
 
 ---
 
@@ -239,35 +447,39 @@ ollama serve
 | Дата | Задача | Что сделано |
 |------|--------|-------------|
 | 2026-09-07 | A-01..A-04 | analyzer, AI interface, Ollama smoke |
-| 2026-09-15 | A-02, A-09 | MCP в Cursor, global mcp.json |
-| 2026-09-16 | A-06, A-07 | Mermaid pipeline в MCP, Ollama env |
-| 2026-09-17 | A-07, A-08 | PackageGraph filter, safeId dots |
-| 2026-09-17 | A-10 | README |
-| 2026-09-17 | — | Создан `docs/PLAN.md`, фокус → C-01 |
+| 2026-09-15 | A-02, A-09 | MCP в Cursor |
+| 2026-09-16 | A-06, A-07 | Mermaid в MCP, Ollama env |
+| 2026-09-17 | A-07, A-08 | PackageGraph, safeId |
+| 2026-09-17 | A-10 | README; первый PLAN (RuleAnalyzer) |
+| 2026-09-21 | — | Стратегия сменена на text-to-graph query; PLAN переписан; фокус C-01 Execute |
+| 2026-09-21 | — | Зафиксированы две диаграммы потоков (с вопросом / без); AI = парсер вопроса |
 
 ---
 
-## Что НЕ в плане ( явно отложено )
+## Что явно НЕ в плане
 
-- Два round-trip AI через Cursor (архитектура A+)
-- MCP sampling (deprecated / ненадёжно)
-- Отправка полного AST в LLM (только PackageGraph)
-- Платный Claude API как requirement
+- RuleAnalyzer / arch lint как MVP
+- Два round-trip AI через Cursor для построения графа
+- MCP sampling
+- Отправка funcs/types/AST в LLM
+- Claude API как requirement
+- LLM генерирует весь Mermaid или список пакетов в обход Execute
 
 ---
 
-## Быстрая проверка «всё работает»
+## Быстрая проверка
 
 ```bash
-# 1. Analyzer
+# 1. Граф + (после C-01) query
 go test ./internal/analyzer/...
 
-# 2. CLI mock (быстро)
+# 2. Схема без вопроса (после C-04 — без Ollama)
 go run ./cmd/goarch analyze testdata/sample-project
 
-# 3. CLI ollama (~15 сек)
-GOARCH_AI=ollama go run ./cmd/goarch analyze testdata/sample-project
+# 3. Query (после C-04)
+go run ./cmd/goarch analyze testdata/sample-project кто импортирует service
 
-# 4. MCP — в Cursor:
-# «Вызови analyze_project с path: .../testdata/sample-project»
+# 4. MCP
+# «Вызови analyze_project path=.../sample-project»
+# «… path=.../bookings question=кто импортирует dto кроме http»
 ```
