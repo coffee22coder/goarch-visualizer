@@ -22,16 +22,7 @@ func Execute(g *Graph, q Query) (*Graph, error) {
 	pg := PackageGraph(g)
 
 	switch q.Op {
-	case OpDependents:
-		err := includesTarget(pg, q.Target)
-		if err != nil {
-			return nil, err
-		}
-
-		g := createGraph(q.Op, pg, q.Target)
-		return g, nil
-
-	case OpDependencies:
+	case OpDependents, OpDependencies:
 		err := includesTarget(pg, q.Target)
 		if err != nil {
 			return nil, err
