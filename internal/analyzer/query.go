@@ -1,6 +1,8 @@
 package analyzer
 
-import "fmt"
+import (
+	"fmt"
+)
 
 type Op string
 
@@ -12,10 +14,11 @@ const (
 )
 
 type Query struct {
-	Op            Op
-	Target        NodeID
-	From, To      NodeID
-	ExcludePrefix []string
+	Op            Op       `json:"op"`
+	Target        NodeID   `json:"target"`
+	From          NodeID   `json:"from"`
+	To            NodeID   `json:"to"`
+	ExcludePrefix []string `json:"exclude_prefix"`
 }
 
 func Execute(g *Graph, q Query) (*Graph, error) {
@@ -32,7 +35,75 @@ func Execute(g *Graph, q Query) (*Graph, error) {
 		return g, nil
 
 	case OpPath:
+		queue := []NodeID{q.From}
+		seen := map[NodeID]struct{}{q.From: {}}
+		prev := map[NodeID]NodeID{}
+
+	LOOP:
+		for len(queue) > 0 {
+			current := queue[0]
+			queue = queue[1:]
+
+			for _, e := range pg.Edges {
+				if e.From != current {
+					continue
+				}
+
+				next := NodeID(e.To)
+				if _, ok := seen[next]; ok {
+					continue
+				}
+				seen[next] = struct{}{}
+				prev[next] = current
+				if next == q.To {
+					break LOOP
+				}
+				queue = append(queue, next)
+			}
+
+		}
+
+		if _, ok := seen[q.To]; !ok {
+			return nil, fmt.Errorf("Empty graph. No import FROM: %s, TO: %s", q.From, q.To)
+		}
+
+		newNodes := make([]Node, 0, len(g.Nodes))
+		newEdges := make([]Edge, 0, len(g.Edges))
+
+		nodeSet := map[NodeID]struct{}{q.To: {}}
+		cur := q.To
+
+		for cur != q.From {
+			cur = prev[cur]
+			nodeSet[cur] = struct{}{}
+		}
+
+		for _, n := range pg.Nodes {
+			if _, ok := nodeSet[n.ID]; ok {
+				newNodes = append(newNodes, n)
+			}
+		}
+
+		for _, e := range pg.Edges {
+			_, okFrom := nodeSet[e.From]
+			_, okTo := nodeSet[NodeID(e.To)]
+			if okFrom && okTo {
+				newEdges = append(newEdges, e)
+			}
+		}
+
+		return &Graph{
+			Nodes: newNodes,
+			Edges: newEdges,
+		}, nil
+
 	case OpNeighbors:
+		err := includesTarget(pg, q.Target)
+		if err != nil {
+			return nil, err
+		}
+		g := createGraph(q.Op, pg, q.Target)
+		return g, nil
 	}
 
 	return nil, fmt.Errorf("Operation %s is not valid", q.Op)
@@ -61,7 +132,17 @@ func createGraph(op Op, g *Graph, t NodeID) *Graph {
 			if e.From == t {
 				nodeSet[NodeID(e.To)] = struct{}{}
 			}
+		case OpNeighbors:
+			{
+				if e.To == string(t) {
+					nodeSet[e.From] = struct{}{}
+				}
+				if e.From == t {
+					nodeSet[NodeID(e.To)] = struct{}{}
+				}
+			}
 		}
+
 	}
 
 	newNodes := make([]Node, 0, len(g.Nodes))

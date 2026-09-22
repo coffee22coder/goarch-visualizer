@@ -29,9 +29,8 @@ func Run(ctx context.Context, a ai.Analyzer, logger *slog.Logger) error {
 			mcp.Required(),
 			mcp.Description("The path to project"),
 		),
-		mcp.WithNumber("level",
-			mcp.Description("The level analyze"),
-			mcp.DefaultNumber(2),
+		mcp.WithString("question",
+			mcp.Description("Optional. Who imports X, path from A to B, ..."),
 		))
 
 	s.AddTool(analyzeProjectTool, func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -49,25 +48,36 @@ func Run(ctx context.Context, a ai.Analyzer, logger *slog.Logger) error {
 
 func analyzeHandler(ctx context.Context, request mcp.CallToolRequest, a ai.Analyzer) (*mcp.CallToolResult, error) {
 	p, err := request.RequireString("path")
+	question := request.GetString("question", "")
+
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
-	// level := request.GetInt("level", 2)
 
 	graph, err := analyzer.AnalyzeDir(p)
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
 
-	analysis, err := a.Analyze(context.Background(), graph, "all")
-	if err != nil {
-		slog.Error("analyze failed", "error", err)
-		return nil, err
+	if question == "" {
+		mermaid := renderer.ToMermaid(*graph, ai.Analysis{})
+		return mcp.NewToolResultText(mermaid), nil
+	} else {
+		query, err := a.ParseQuery(context.Background(), graph, question)
+		if err != nil {
+			slog.Error("analyze failed", "error", err)
+			return nil, err
+		}
+
+		subgraph, err := analyzer.Execute(graph, query)
+		if err != nil {
+			slog.Error("analyze failed", "error", err)
+			return nil, err
+		}
+
+		mermaid := renderer.ToMermaid(*subgraph, ai.Analysis{})
+
+		return mcp.NewToolResultText(mermaid), nil
 	}
 
-	valid := ai.Validate(graph, analysis)
-
-	mermaid := renderer.ToMermaid(*graph, *valid)
-
-	return mcp.NewToolResultText(mermaid), nil
 }

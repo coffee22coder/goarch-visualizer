@@ -2,6 +2,7 @@ package ai
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/coffee22coder/goarch-visualizer/internal/analyzer"
@@ -10,7 +11,6 @@ import (
 type MockAnalyzer struct{}
 
 func (a *MockAnalyzer) Analyze(ctx context.Context, g *analyzer.Graph, focus string) (*Analysis, error) {
-
 	nodes := make([]NodeStatus, 0, len(g.Nodes))
 
 	for _, n := range g.Nodes {
@@ -37,6 +37,10 @@ func (a *MockAnalyzer) Analyze(ctx context.Context, g *analyzer.Graph, focus str
 			"Keep cmd packages thin; move logic to internal/",
 		},
 	}, nil
+}
+
+func (a *MockAnalyzer) ParseQuery(ctx context.Context, g *analyzer.Graph, question string) (analyzer.Query, error) {
+	return analyzer.Query{}, fmt.Errorf("mock: ParseQuery not implemented")
 }
 
 func getReason(n analyzer.Node) string {

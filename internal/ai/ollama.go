@@ -81,3 +81,66 @@ func (a *OllamaAnalyzer) Analyze(ctx context.Context, g *analyzer.Graph, focus s
 
 	return &analysis, nil
 }
+
+func (a *OllamaAnalyzer) ParseQuery(ctx context.Context, g *analyzer.Graph, question string) (analyzer.Query, error) {
+	pkgGraph := analyzer.PackageGraph(g)
+
+	graphJSON, err := json.Marshal(pkgGraph)
+	if err != nil {
+		return analyzer.Query{}, err
+	}
+
+	body := map[string]any{
+		"model":   "qwen2.5-coder:7b",
+		"stream":  false,
+		"format":  "json",
+		"options": map[string]int{"temperature": 0},
+		"messages": []map[string]any{
+			map[string]any{
+				"role":    "system",
+				"content": "You convert a user question into a graph query. Reply with ONLY JSON: {\"op\":\"dependents|dependencies|path|neighbors\",\"target\":\"<package id>\",\"from\":\"<package id>\",\"to\":\"<package id>\",\"exclude_prefix\":[\"...\"]}. Rules: - op is required - use only package ids from the Graph - dependents = who imports target - dependencies = what target imports - path = from → to along imports - neighbors = target plus one hop - omit unused fields or use empty string - do not invent ids",
+			},
+			map[string]any{
+				"role":    "user",
+				"content": "Graph:\n" + string(graphJSON) + "\nQuestion:\n" + question,
+			},
+		},
+	}
+
+	bodyJSON, err := json.Marshal(body)
+	if err != nil {
+		return analyzer.Query{}, err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://localhost:11434/api/chat", bytes.NewReader(bodyJSON))
+	if err != nil {
+		return analyzer.Query{}, err
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	client := &http.Client{}
+	response, err := client.Do(req)
+	if err != nil {
+		return analyzer.Query{}, err
+	}
+	defer response.Body.Close()
+
+	if response.StatusCode != http.StatusOK {
+		return analyzer.Query{}, fmt.Errorf("unexpected response status: %d", response.StatusCode)
+	}
+
+	var resp ollamaResponse
+	err = json.NewDecoder(response.Body).Decode(&resp)
+	if err != nil {
+		return analyzer.Query{}, err
+	}
+
+	var query analyzer.Query
+	err = json.Unmarshal([]byte(resp.Message.Content), &query)
+	if err != nil {
+		return analyzer.Query{}, err
+	}
+
+	return query, nil
+
+}
